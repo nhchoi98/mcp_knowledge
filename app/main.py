@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
-
 from .config import SETTINGS
 from .schemas import MCPCallRequest, MCPManifest
 from .tools import TOOL_SPECS, ToolError, manifest, run_tool

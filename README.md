@@ -50,6 +50,24 @@ curl -X POST http://127.0.0.1:8000/mcp/call \
   -d '{"name":"list_docs","arguments":{}}'
 ```
 
+## 4-1) Notion 빠른 동기화(MVP)
+
+Notion 통합 토큰과 루트 페이지 ID를 `.env`에 넣고 실행하면
+`KNOWLEDGE_ROOT` 아래 `NOTION_SYNC_SUBDIR` 폴더(기본 `notion`)로 Markdown이 동기화됩니다.
+
+```bash
+set -a; source .env; set +a
+python scripts/sync_notion.py
+```
+
+동기화 후 MCP 탐색 확인:
+
+```bash
+curl -s http://127.0.0.1:8000/mcp/call \
+  -H 'content-type: application/json' \
+  -d '{"name":"list_docs","arguments":{}}'
+```
+
 토큰을 켠 경우:
 
 ```bash
