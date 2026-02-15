@@ -32,6 +32,31 @@ def _discover_git_root(start_dir: Path | None = None) -> Path:
 
 
 def load_settings() -> Settings:
+    project_root = Path(__file__).resolve().parent.parent
+    env_path = project_root / "env" / ".env"
+    if not env_path.exists():
+        env_path = project_root / ".env"
+
+    if env_path.exists():
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+
+            value = value.strip()
+            if (value.startswith("\"") and value.endswith("\"")) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+
+            os.environ.setdefault(key, value)
+
     raw_root = os.getenv("KNOWLEDGE_ROOT")
     if raw_root:
         root = Path(raw_root).expanduser().resolve()

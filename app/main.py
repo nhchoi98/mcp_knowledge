@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlparse
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -17,7 +18,6 @@ DEFAULT_PROTOCOL_VERSION = "2025-11-25"
 app = FastAPI(title=SERVER_NAME, version=SERVER_VERSION)
 
 
-
 def require_token(authorization: str | None = Header(default=None)) -> None:
     token = SETTINGS.api_token
     if not token:
@@ -31,12 +31,46 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token")
 
 
+def _is_origin_allowed(origin: str) -> bool:
+    if not origin or origin == "null":
+        return True
+    if origin in SETTINGS.allowed_origins:
+        return True
+
+    parsed = urlparse(origin)
+    if parsed.scheme and parsed.hostname:
+        if f"{parsed.scheme}://{parsed.hostname}" in SETTINGS.allowed_origins:
+            return True
+
+        with_port = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}" if parsed.port else None
+        if with_port and with_port in SETTINGS.allowed_origins:
+            return True
+
+        for candidate in SETTINGS.allowed_origins:
+            if candidate.endswith(":*") and f"{parsed.scheme}://{parsed.hostname}" == candidate[:-2]:
+                return True
+
+    return False
+
+
 def require_origin(origin: str | None = Header(default=None)) -> None:
-    # For non-browser clients (CLI/agent), Origin is typically absent and allowed.
-    if not origin:
-        return
-    if origin not in SETTINGS.allowed_origins:
+    if not _is_origin_allowed(origin or ""):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="origin not allowed")
+
+
+def _event_stream():
+    async def event_stream():
+        data = {
+            "server": SERVER_NAME,
+            "version": SERVER_VERSION,
+            "tools": [name for name in TOOL_SPECS.keys()],
+        }
+        yield f"event: manifest\ndata: {json.dumps(data)}\n\n"
+        while True:
+            yield "event: heartbeat\ndata: {}\n\n"
+            await __import__("asyncio").sleep(15)
+
+    return event_stream()
 
 
 @app.on_event("startup")
@@ -71,18 +105,17 @@ def mcp_call(payload: MCPCallRequest) -> dict[str, Any]:
 
 @app.get("/mcp/sse", dependencies=[Depends(require_token), Depends(require_origin)])
 async def mcp_sse() -> StreamingResponse:
-    async def event_stream():
-        data = {
-            "server": SERVER_NAME,
-            "version": SERVER_VERSION,
-            "tools": [name for name in TOOL_SPECS.keys()],
-        }
-        yield f"event: manifest\ndata: {json.dumps(data)}\n\n"
-        while True:
-            yield "event: heartbeat\ndata: {}\n\n"
-            await __import__("asyncio").sleep(15)
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+@app.post("/mcp/sse", dependencies=[Depends(require_token), Depends(require_origin)])
+async def mcp_sse_post() -> StreamingResponse:
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@app.get("/mcp", dependencies=[Depends(require_token), Depends(require_origin)])
+async def mcp_get() -> StreamingResponse:
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
 @app.post("/mcp", dependencies=[Depends(require_token), Depends(require_origin)])

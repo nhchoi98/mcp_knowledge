@@ -19,6 +19,17 @@ export MCP_API_TOKEN=dev-token-123
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+### 운영용 예시 환경변수 (ALLOWED_ORIGINS + READ_ONLY + Git root)
+
+```bash
+export USE_GIT_ROOT=true
+export ALLOWED_EXTENSIONS=.md,.txt,.py,.ts,.json
+export READ_ONLY=false
+export MCP_API_TOKEN=ops-token-please-rotate
+export ALLOWED_ORIGINS=http://127.0.0.1:8000,https://127.0.0.1:8000,http://localhost:3000,https://localhost:3000
+export MAX_READ_BYTES=2000000
+```
+
 ## 2) MCP 서버에 노출된 엔드포인트
 
 - `POST /mcp` : MCP JSON-RPC 엔드포인트 (권장)
@@ -49,6 +60,51 @@ Cursor 설정 예시
     }
   }
 }
+```
+
+### 운영용 템플릿 (ALLOWED_ORIGINS 포함)
+
+```json
+{
+  "mcpServers": {
+    "local-knowledge": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer ops-token-please-rotate",
+        "Origin": "http://127.0.0.1:3000"
+      }
+    }
+  }
+}
+```
+
+### Read-only + Git root + 보안 헤더 템플릿
+
+```json
+{
+  "mcpServers": {
+    "local-knowledge-ro": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer read-only-token-123",
+        "Origin": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+서버 쪽 실행 예시:
+
+```bash
+export USE_GIT_ROOT=true
+export READ_ONLY=true
+export MCP_API_TOKEN=read-only-token-123
+export ALLOWED_EXTENSIONS=.md,.txt
+export ALLOWED_ORIGINS=http://localhost:3000,https://localhost:3000,http://127.0.0.1:3000
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ### B. stdio를 쓰는 환경(권장 아님)
@@ -102,3 +158,9 @@ Cursor 설정 예시
 - 툴이 안 보임: `/mcp` 반환값, `tools/list` 응답 확인
 - 토큰 오류: `401`이면 토큰/헤더 형식(`Bearer ` 접두사) 확인
 - 접근 오류: `FORBIDDEN`이면 `KNOWLEDGE_ROOT` 또는 경로 traversal 검사 조건 재확인
+
+## 7) 재분류/정리 TODO 연동
+
+- 상세 실행 TODO는 `CURSOR_SETUP_TODO.md`를 기준으로 진행
+- Manifest 확장 후보: `reclassify_docs`, `rebuild_topic_index`
+- 운영은 1) `list_docs` → 2) `search_docs` → 3) `read_doc` → 4) `rebuild_summary` → 5) (필요 시 재분류 Tool)

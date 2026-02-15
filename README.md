@@ -19,7 +19,6 @@
 - 읽기 전용 모드 (`READ_ONLY=true`)에서 쓰기 계열 도구 차단
 - 선택적 토큰 인증 (`MCP_API_TOKEN`)
 
-
 - Cursor 연결 가이드: `CURSOR_MCP_SETUP.md`
 
 ## 3) 실행
