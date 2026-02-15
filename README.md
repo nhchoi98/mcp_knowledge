@@ -13,10 +13,14 @@
 ## 2) 보안 설계
 
 - `KNOWLEDGE_ROOT` 하위 경로만 접근 가능
+- `USE_GIT_ROOT=true`면 실행 시점의 현재 디렉토리부터 상위로 올라가 `.git`을 찾고, 찾으면 그 루트를 지식 루트로 사용
 - 경로 탈출(`../`) 방지: resolve 후 루트 prefix 검사
 - 확장자 allowlist (`ALLOWED_EXTENSIONS`, 기본 `.md,.txt`)
 - 읽기 전용 모드 (`READ_ONLY=true`)에서 쓰기 계열 도구 차단
 - 선택적 토큰 인증 (`MCP_API_TOKEN`)
+
+
+- Cursor 연결 가이드: `CURSOR_MCP_SETUP.md`
 
 ## 3) 실행
 
@@ -28,6 +32,13 @@ cp .env.example .env
 # 필요시 값 수정
 set -a; source .env; set +a
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Git repo를 바로 지식 저장소로 쓰고 싶다면:
+
+```bash
+export USE_GIT_ROOT=true
+export ALLOWED_EXTENSIONS=.md,.txt,.py,.ts
 ```
 
 ## 4) 빠른 테스트

@@ -22,8 +22,24 @@ class Settings:
 
 
 
+def _discover_git_root(start_dir: Path | None = None) -> Path:
+    current = (start_dir or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return current
+
+
+
 def load_settings() -> Settings:
-    root = Path(os.getenv("KNOWLEDGE_ROOT", "~/knowledge")).expanduser().resolve()
+    raw_root = os.getenv("KNOWLEDGE_ROOT")
+    if raw_root:
+        root = Path(raw_root).expanduser().resolve()
+    elif _parse_bool(os.getenv("USE_GIT_ROOT"), default=False):
+        root = _discover_git_root()
+    else:
+        root = Path("~/knowledge").expanduser().resolve()
+
     extensions_raw = os.getenv("ALLOWED_EXTENSIONS", ".md,.txt")
     extensions = tuple(sorted({ext.strip().lower() for ext in extensions_raw.split(",") if ext.strip()}))
 
