@@ -165,9 +165,23 @@ def rebuild_summary(payload: RebuildSummaryInput) -> RebuildSummaryOutput:
         raise ToolError("server is in read-only mode", status_code=403)
 
     docs: list[tuple[str, str]] = []
+    invalid: list[str] = []
     for rel in payload.paths:
-        doc = read_doc(ReadDocInput(path=rel))
-        docs.append((doc.path, doc.content))
+        normalized = rel.lstrip("/")
+        try:
+            doc = read_doc(ReadDocInput(path=normalized))
+            docs.append((doc.path, doc.content))
+        except ToolError as exc:
+            invalid.append(f"{rel} ({exc})")
+        except Exception:
+            invalid.append(rel)
+
+    if not docs:
+        raise ToolError(
+            "rebuild_summary received no valid files. "
+            "Use list_docs with .md files only. invalid paths: "
+            + ", ".join(invalid[:20])
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     lines: list[str] = [f"# Rebuilt Summary ({payload.style})", "", f"Generated at: {now}", ""]

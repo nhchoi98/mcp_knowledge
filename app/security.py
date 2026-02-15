@@ -21,19 +21,19 @@ def resolve_relative_path(path: str, *, expect_file: bool = True, must_exist: bo
 
     candidate = Path(path)
     if candidate.is_absolute():
-        raise SecurityError("absolute paths are not allowed")
+        raise SecurityError(f"absolute paths are not allowed: {path}")
 
     resolved = (SETTINGS.knowledge_root / candidate).resolve()
 
     root = SETTINGS.knowledge_root
     if resolved != root and root not in resolved.parents:
-        raise SecurityError("path escapes knowledge root")
+        raise SecurityError(f"path escapes knowledge root: {path}")
 
     if must_exist and not resolved.exists():
-        raise SecurityError("path does not exist")
+        raise SecurityError(f"path does not exist: {path}")
 
     if expect_file and resolved.exists() and not resolved.is_file():
-        raise SecurityError("path is not a file")
+        raise SecurityError(f"path is not a file: {path}")
 
     if expect_file and not is_allowed_extension(resolved):
         raise SecurityError(

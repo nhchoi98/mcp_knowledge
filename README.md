@@ -146,6 +146,10 @@ Cursor가 `Streamable HTTP`를 지원하면 이 서버를 그대로 붙일 수 �
 }
 ```
 
+`rebuild_summary`에 전달하는 `paths`는 **파일 경로만** 허용됩니다.
+`Backend/FastAPI` 같은 폴더 경로, 절대 경로(`/foo.md`)는 서버에서 거부되며,
+유효한 값은 `KNOWLEDGE_ROOT` 기준의 상대 경로(`project-a/notes.md`)여야 합니다.
+
 ## 8) 다음 단계 제안
 
 - 검색 품질 향상이 필요하면 `search_docs`를 BM25/임베딩 인덱스로 교체
