@@ -1,0 +1,117 @@
+{
+  "mcpServers": {
+    "local-knowledge-github": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp",
+      "description": "Local knowledge MCP server with GitHub sync status and PR creation",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      },
+      "features": {
+        "knowledge_management": [
+          "list_docs",
+          "read_doc",
+          "search_docs",
+          "upsert_doc",
+          "rebuild_summary"
+        ],
+        "github_integration": [
+          "sync_status",
+          "create_pr"
+        ]
+      }
+    }
+  },
+  "configurations": {
+    "github_sync_mode": {
+      "environment": {
+        "KNOWLEDGE_BACKEND": "github",
+        "GITHUB_REPO": "owner/repo",
+        "GITHUB_REF": "main",
+        "GITHUB_TOKEN": "ghp_your_github_token",
+        "MCP_API_TOKEN": "your_mcp_api_token"
+      },
+      "description": "GitHub 저장소를 동기화하여 사용하는 모드"
+    },
+    "local_git_mode": {
+      "environment": {
+        "USE_GIT_ROOT": "true",
+        "ALLOWED_EXTENSIONS": ".md,.txt,.py,.ts,.json",
+        "MCP_API_TOKEN": "your_mcp_api_token"
+      },
+      "description": "로컬 Git 저장소의 루트를 자동으로 찾아 사용하는 모드"
+    },
+    "readonly_mode": {
+      "environment": {
+        "READ_ONLY": "true",
+        "KNOWLEDGE_ROOT": "/path/to/knowledge",
+        "MCP_API_TOKEN": "your_mcp_api_token"
+      },
+      "description": "읽기 전용 모드 (upsert_doc, rebuild_summary 비활성화)"
+    }
+  },
+  "github_status_workflow": {
+    "description": "GitHub 동기화 상태 확인 및 PR 생성 워크플로우",
+    "steps": [
+      {
+        "step": 1,
+        "tool": "sync_status",
+        "purpose": "Git 워크스페이스 상태 확인 (staged/unstaged/untracked 파일 목록)",
+        "output": {
+          "branch": "현재 브랜치명",
+          "workspace": "워크스페이스 경로",
+          "remote_url": "원격 저장소 URL",
+          "staged_files": "스테이징된 파일 목록",
+          "unstaged_files": "스테이징되지 않은 변경 파일",
+          "untracked_files": "추적되지 않는 새 파일"
+        }
+      },
+      {
+        "step": 2,
+        "tool": "create_pr",
+        "purpose": "스테이징된 변경사항을 새 브랜치로 커밋하고 PR 생성",
+        "input": {
+          "branch_name": "새 브랜치명 (예: feature/update-docs)",
+          "commit_message": "커밋 메시지",
+          "pr_title": "PR 제목",
+          "pr_body": "PR 설명"
+        },
+        "output": {
+          "ok": true,
+          "pr_url": "GitHub PR 비교 URL",
+          "branch": "생성된 브랜치명",
+          "commit_sha": "커밋 SHA"
+        }
+      }
+    ]
+  },
+  "usage_examples": {
+    "check_git_status": {
+      "description": "현재 Git 상태 확인",
+      "tool": "sync_status",
+      "request": {
+        "name": "sync_status",
+        "arguments": {}
+      }
+    },
+    "create_documentation_pr": {
+      "description": "문서 업데이트 PR 생성",
+      "steps": [
+        "1. upsert_doc로 문서 생성/수정",
+        "2. sync_status로 변경사항 확인",
+        "3. git add로 파일 스테이징 (서버 외부에서 수동)",
+        "4. create_pr로 PR 생성"
+      ],
+      "tool": "create_pr",
+      "request": {
+        "name": "create_pr",
+        "arguments": {
+          "branch_name": "docs/update-readme",
+          "commit_message": "docs: Update README with new features",
+          "pr_title": "Update documentation",
+          "pr_body": "- Added GitHub sync documentation\n- Updated examples"
+        }
+      }
+    }
+  }
+}

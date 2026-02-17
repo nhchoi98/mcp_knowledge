@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from urllib.parse import urlparse
 from typing import Any
 
@@ -8,7 +9,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from .config import SETTINGS
 from .schemas import MCPCallRequest, MCPManifest
-from .tools import TOOL_SPECS, ToolError, describe_tool, manifest, run_tool
+from .tools import TOOL_SPECS, ToolError, describe_tool, github_connection_probe, manifest, run_tool
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 SERVER_NAME = "local-knowledge-mcp"
 SERVER_VERSION = "0.1.0"
@@ -80,12 +87,14 @@ def _startup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
     return {
         "ok": True,
         "backend": SETTINGS.backend,
         "knowledge_root": str(SETTINGS.knowledge_root),
         "github_repo": SETTINGS.github_repo,
         "github_ref": SETTINGS.github_ref,
+        "github_status": github_status,
         "read_only": SETTINGS.read_only,
         "tool_count": len(TOOL_SPECS),
     }
@@ -98,12 +107,18 @@ def mcp_manifest() -> MCPManifest:
 
 @app.post("/mcp/call", dependencies=[Depends(require_token), Depends(require_origin)])
 def mcp_call(payload: MCPCallRequest) -> dict[str, Any]:
+    github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
+    logger.info(
+        f"MCP Call - Tool: {payload.name}, Arguments: {payload.arguments}, github_connected: {github_status.get('connected')}"
+    )
     try:
         result = run_tool(payload.name, payload.arguments)
+        logger.info(f"MCP Call Success - Tool: {payload.name}")
     except ToolError as exc:
+        logger.error(f"MCP Call Error - Tool: {payload.name}, Error: {str(exc)}")
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    return {"ok": True, "tool": payload.name, "result": result.model_dump(mode="json")}
+    return {"ok": True, "tool": payload.name, "result": result.model_dump(mode="json"), "github_status": github_status}
 
 
 @app.get("/mcp/sse", dependencies=[Depends(require_token), Depends(require_origin)])
@@ -151,6 +166,7 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
         return JSONResponse(status_code=202, content={})
 
     try:
+        logger.info(f"MCP JSON-RPC - Method: {method}, Params: {params}")
         if method == "initialize":
             protocol_version = params.get("protocolVersion") or DEFAULT_PROTOCOL_VERSION
             result = {
@@ -173,16 +189,22 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
         elif method == "tools/call":
             name = params.get("name")
             arguments = params.get("arguments") or {}
+            github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
+            logger.info(f"MCP Tool Call - Tool: {name}, Arguments: {arguments}")
+            logger.info(f"MCP Tool Call - github_status: {github_status}")
             model = run_tool(name, arguments)
             structured = model.model_dump(mode="json")
             result = {
                 "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False)}],
                 "structuredContent": structured,
+                "github": github_status,
                 "isError": False,
             }
+            logger.info(f"MCP Tool Call Success - Tool: {name}")
         elif method == "ping":
             result = {}
         else:
+            logger.warning(f"MCP Unknown Method: {method}")
             return JSONResponse(
                 status_code=404,
                 content={
@@ -192,6 +214,7 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
                 },
             )
     except ToolError as exc:
+        logger.error(f"MCP Tool Error - Method: {method}, Error: {str(exc)}")
         return JSONResponse(
             status_code=400,
             content={
@@ -201,6 +224,7 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
             },
         )
     except Exception as exc:
+        logger.error(f"MCP Internal Error - Method: {method}, Error: {str(exc)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={

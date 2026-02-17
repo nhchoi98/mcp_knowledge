@@ -180,6 +180,33 @@ def _extract_points(content: str, max_points: int = 5) -> list[str]:
     return points
 
 
+def github_connection_probe() -> dict[str, Any]:
+    if SETTINGS.backend != "github":
+        return {"connected": False, "backend": SETTINGS.backend, "reason": "backend is not github"}
+
+    try:
+        manager = _github()
+        workspace = manager.workspace_root()
+        manager.ensure_repo()
+        remote_url = manager._run(["git", "-C", str(workspace), "remote", "get-url", manager.remote_name], cwd=workspace)
+        manager._run(
+            ["git", "-C", str(workspace), "ls-remote", "--exit-code", manager.remote_name, manager.ref],
+            cwd=workspace,
+        )
+        return {
+            "connected": True,
+            "backend": SETTINGS.backend,
+            "repository": manager.repo,
+            "ref": manager.ref,
+            "workspace": str(workspace),
+            "remote_url": remote_url,
+        }
+    except GitHubSyncError as exc:
+        return {"connected": False, "backend": SETTINGS.backend, "reason": str(exc)}
+    except Exception as exc:  # pragma: no cover
+        return {"connected": False, "backend": SETTINGS.backend, "reason": str(exc)}
+
+
 def list_docs(payload: ListDocsInput) -> ListDocsOutput:
     if SETTINGS.backend == "github":
         return ListDocsOutput(docs=_list_docs_github(payload.subdir))
@@ -263,22 +290,46 @@ def rebuild_summary(payload: RebuildSummaryInput) -> RebuildSummaryOutput:
     if SETTINGS.read_only:
         raise ToolError("server is in read-only mode", status_code=403)
 
+    base_root = _base_root()
     docs: list[tuple[str, str]] = []
     invalid: list[str] = []
     for rel in payload.paths:
         normalized = rel.lstrip("/")
         try:
-            doc = read_doc(ReadDocInput(path=normalized))
-            docs.append((doc.path, doc.content))
+            candidate = _resolve_local_path(normalized, expect_file=False, must_exist=True, base=base_root)
         except ToolError as exc:
             invalid.append(f"{rel} ({exc})")
-        except Exception:
-            invalid.append(rel)
+            continue
+
+        if candidate.is_dir():
+            source_docs = _all_docs_under(candidate)
+            if not source_docs:
+                invalid.append(f"{rel} (empty directory)")
+                continue
+            for p in source_docs:
+                try:
+                    content = p.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    invalid.append(f"{_to_rel(p)} ({exc})")
+                    continue
+                docs.append((_to_rel(p), content))
+            continue
+
+        if candidate.suffix.lower() not in SETTINGS.allowed_extensions:
+            invalid.append(f"{rel} (unsupported extension)")
+            continue
+
+        try:
+            content = candidate.read_text(encoding="utf-8", errors="replace")
+            docs.append((_to_rel(candidate), content))
+        except OSError as exc:
+            invalid.append(f"{rel} ({exc})")
+            continue
 
     if not docs:
         raise ToolError(
             "rebuild_summary received no valid files. "
-            "Use list_docs with .md files only. invalid paths: "
+            "Use list_docs with files or directories that contain .md/.txt files. invalid paths: "
             + ", ".join(invalid[:20])
         )
 
@@ -347,9 +398,7 @@ def create_pr(payload: CreatePRInput) -> CreatePROutput:
         pr_url=pr_url,
         push_command=f"git -C {_github().workspace_root()} push origin {branch}",
     )
-
-
-    TOOL_SPECS: dict[str, ToolSpec] = {
+TOOL_SPECS: dict[str, ToolSpec] = {
     "list_docs": ToolSpec(
         name="list_docs",
         description="List knowledge documents under an optional subdirectory",
