@@ -9,6 +9,9 @@
 - `search_docs`: 키워드 라인 검색
 - `upsert_doc`: 문서 생성/갱신 (`overwrite`/`append`)
 - `rebuild_summary`: 여러 문서를 요약/재구성해 새 파일로 저장
+- `KNOWLEDGE_BACKEND=github` 설정 시 GitHub 저장소를 로컬에 동기화한 뒤 조작합니다.
+- `sync_status`: GitHub 동기화 상태(스테이지/언스테이지/새 브랜치용 상태) 조회
+- `create_pr`: 스테이징된 변경을 새 브랜치로 커밋 + push 하고 PR 비교 URL 생성
 
 ## 2) 보안 설계
 
@@ -28,8 +31,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 필요시 값 수정
-set -a; source .env; set +a
+# 필요시 .env 값 수정
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -39,6 +41,25 @@ Git repo를 바로 지식 저장소로 쓰고 싶다면:
 export USE_GIT_ROOT=true
 export ALLOWED_EXTENSIONS=.md,.txt,.py,.ts
 ```
+
+GitHub 원격 저장소를 동기화 모드로 쓰려면:
+
+```bash
+KNOWLEDGE_BACKEND=github
+GITHUB_REPO=owner/repo
+GITHUB_REF=main
+GITHUB_TOKEN=ghp_xxx   # private repo 또는 rate limit 완화용
+ALLOWED_EXTENSIONS=.md,.txt,.py,.ts
+```
+
+위 값들을 `.env`에 넣으면 서버가 시작 시 자동으로 읽습니다.
+
+`KNOWLEDGE_BACKEND=github`일 때:
+- 조회(`list_docs`, `read_doc`, `search_docs`)는 동작 전 `git pull`을 실행하고 로컬 파일을 읽어 반환합니다.
+- 수정(`upsert_doc`, `rebuild_summary`)은 로컬 파일 변경 후 `git add`로 staged 상태로 기록합니다.
+- PR 전용으로 `sync_status` 툴로 상태를 확인하고, `create_pr` 툴로 브랜치 커밋 + push + PR URL 생성이 가능합니다.
+- MCP manifest(`GET /mcp/manifest`, `tools/list`)의 description에 `source: github:<repo>@<ref>`가 자동 표기됩니다.
+- GitHub 작업 폴더는 `KNOWLEDGE_ROOT/<owner>__<repo>` 입니다.
 
 ## 4) 빠른 테스트
 
@@ -125,6 +146,9 @@ Cursor가 `Streamable HTTP`를 지원하면 이 서버를 그대로 붙일 수 �
   "case_sensitive": false
 }
 ```
+
+GitHub 백엔드에서는 `search_docs`가 허용 확장자 파일을 순회하며 내용을 조회하므로,
+문서 수가 많으면 API 호출 수가 증가할 수 있습니다.
 
 ### `upsert_doc`
 

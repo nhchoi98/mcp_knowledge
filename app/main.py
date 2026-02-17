@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from .config import SETTINGS
 from .schemas import MCPCallRequest, MCPManifest
-from .tools import TOOL_SPECS, ToolError, manifest, run_tool
+from .tools import TOOL_SPECS, ToolError, describe_tool, manifest, run_tool
 
 SERVER_NAME = "local-knowledge-mcp"
 SERVER_VERSION = "0.1.0"
@@ -74,14 +74,18 @@ def _event_stream():
 
 @app.on_event("startup")
 def _startup() -> None:
-    SETTINGS.knowledge_root.mkdir(parents=True, exist_ok=True)
+    if SETTINGS.backend == "local":
+        SETTINGS.knowledge_root.mkdir(parents=True, exist_ok=True)
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
         "ok": True,
+        "backend": SETTINGS.backend,
         "knowledge_root": str(SETTINGS.knowledge_root),
+        "github_repo": SETTINGS.github_repo,
+        "github_ref": SETTINGS.github_ref,
         "read_only": SETTINGS.read_only,
         "tool_count": len(TOOL_SPECS),
     }
@@ -159,7 +163,7 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
                 "tools": [
                     {
                         "name": spec.name,
-                        "description": spec.description,
+                        "description": describe_tool(spec),
                         "inputSchema": spec.input_model.model_json_schema(),
                         "outputSchema": spec.output_model.model_json_schema(),
                     }

@@ -13,11 +13,16 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
+    backend: str
     knowledge_root: Path
     allowed_extensions: tuple[str, ...]
     allowed_origins: tuple[str, ...]
     read_only: bool
     api_token: str | None
+    github_repo: str | None
+    github_ref: str
+    github_token: str | None
+    github_timeout_seconds: float
     notion_api_token: str | None
     notion_root_page_id: str | None
     notion_sync_subdir: str
@@ -66,13 +71,21 @@ def load_settings() -> Settings:
             return env_map[name]
         return os.getenv(name, default)
 
-    raw_root = _get("KNOWLEDGE_ROOT")
-    if raw_root:
-        root = Path(raw_root).expanduser().resolve()
-    elif _parse_bool(_get("USE_GIT_ROOT"), default=False):
-        root = _discover_git_root()
+    backend = (_get("KNOWLEDGE_BACKEND", "local") or "local").strip().lower()
+    if backend not in {"local", "github"}:
+        backend = "local"
+
+    if backend == "github":
+        # GitHub backend does not use a local knowledge directory.
+        root = project_root
     else:
-        root = Path("~/knowledge").expanduser().resolve()
+        raw_root = _get("KNOWLEDGE_ROOT")
+        if raw_root:
+            root = Path(raw_root).expanduser().resolve()
+        elif _parse_bool(_get("USE_GIT_ROOT"), default=False):
+            root = _discover_git_root()
+        else:
+            root = Path("~/knowledge").expanduser().resolve()
 
     extensions_raw = _get("ALLOWED_EXTENSIONS", ".md,.txt")
     extensions = tuple(sorted({ext.strip().lower() for ext in extensions_raw.split(",") if ext.strip()}))
@@ -83,6 +96,15 @@ def load_settings() -> Settings:
     token = _get("MCP_API_TOKEN")
     if token:
         token = token.strip()
+
+    github_repo = _get("GITHUB_REPO")
+    if github_repo:
+        github_repo = github_repo.strip() or None
+
+    github_ref = (_get("GITHUB_REF", "main") or "main").strip()
+    github_token = _get("GITHUB_TOKEN")
+    if github_token:
+        github_token = github_token.strip() or None
 
     origins_raw = _get(
         "ALLOWED_ORIGINS",
@@ -102,11 +124,16 @@ def load_settings() -> Settings:
     notion_max_pages = int(_get("NOTION_MAX_PAGES", "0") or "0")
 
     return Settings(
+        backend=backend,
         knowledge_root=root,
         allowed_extensions=extensions,
         allowed_origins=origins,
         read_only=_parse_bool(_get("READ_ONLY"), default=False),
         api_token=token or None,
+        github_repo=github_repo,
+        github_ref=github_ref,
+        github_token=github_token,
+        github_timeout_seconds=float(_get("GITHUB_TIMEOUT_SECONDS", "15") or "15"),
         notion_api_token=notion_api_token,
         notion_root_page_id=notion_root_page_id,
         notion_sync_subdir=notion_sync_subdir,
