@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Callable
+# This module is kept for backwards compatibility
+# All functionality has been moved to:
+# - app.models for data models
+# - app.services for business logic
 
-from pydantic import BaseModel
-
-from .config import SETTINGS
-from .github_sync import GitHubSyncError, GitHubSyncManager
-from .schemas import (
-    GitHubSyncStateInput,
-    GitHubSyncStateOutput,
+from .models import (
     CreatePRInput,
     CreatePROutput,
+    GitHubSyncStateInput,
+    GitHubSyncStateOutput,
     ListDocsInput,
     ListDocsOutput,
-    MCPToolDef,
     ReadDocInput,
     ReadDocOutput,
     RebuildSummaryInput,
@@ -26,78 +21,70 @@ from .schemas import (
     SearchHit,
     UpsertDocInput,
     UpsertDocOutput,
+    MCPToolDef,
 )
-from .security import SecurityError
+from .services import (
+    DocumentService,
+    GitHubService,
+    MCPService,
+    SummaryService,
+    ToolError,
+    TOOL_SPECS,
+    describe_tool,
+)
 
+# Re-export service methods as module-level functions for backwards compatibility
+list_docs = DocumentService.list_docs
+read_doc = DocumentService.read_doc
+search_docs = DocumentService.search_docs
+upsert_doc = DocumentService.upsert_doc
+rebuild_summary = SummaryService.rebuild_summary
+sync_status = GitHubService.sync_status
+create_pr = GitHubService.create_pr
+github_connection_probe = GitHubService.github_connection_probe
+manifest = MCPService.manifest
+run_tool = MCPService.run_tool
 
-class ToolError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 400) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+__all__ = [
+    # Models
+    "CreatePRInput",
+    "CreatePROutput",
+    "GitHubSyncStateInput",
+    "GitHubSyncStateOutput",
+    "ListDocsInput",
+    "ListDocsOutput",
+    "ReadDocInput",
+    "ReadDocOutput",
+    "RebuildSummaryInput",
+    "RebuildSummaryOutput",
+    "SearchDocsInput",
+    "SearchDocsOutput",
+    "SearchHit",
+    "UpsertDocInput",
+    "UpsertDocOutput",
+    "MCPToolDef",
+    # Services
+    "DocumentService",
+    "GitHubService",
+    "MCPService",
+    "SummaryService",
+    # Utils
+    "ToolError",
+    "TOOL_SPECS",
+    "describe_tool",
+    # Functions
+    "list_docs",
+    "read_doc",
+    "search_docs",
+    "upsert_doc",
+    "rebuild_summary",
+    "sync_status",
+    "create_pr",
+    "github_connection_probe",
+    "manifest",
+    "run_tool",
+]
 
-
-@dataclass(frozen=True)
-class ToolSpec:
-    name: str
-    description: str
-    input_model: type[BaseModel]
-    output_model: type[BaseModel]
-    handler: Callable[[BaseModel], BaseModel]
-
-
-def describe_tool(spec: ToolSpec) -> str:
-    description = spec.description
-    if SETTINGS.backend == "github" and SETTINGS.github_repo and spec.name in {"list_docs", "read_doc", "search_docs"}:
-        description = f"{description} (source: github:{SETTINGS.github_repo}@{SETTINGS.github_ref})"
-    return description
-
-
-_github_sync: GitHubSyncManager | None = None
-
-
-def _github() -> GitHubSyncManager:
-    global _github_sync
-    if _github_sync is None:
-        _github_sync = GitHubSyncManager()
-    return _github_sync
-
-
-def _utc_iso(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc)
-
-
-def _to_rel(path: Path) -> str:
-    if SETTINGS.backend == "github":
-        return str(path.relative_to(_github().workspace_root()))
-    return str(path.relative_to(SETTINGS.knowledge_root))
-
-
-def _safe_rel(raw: str) -> str:
-    if not raw or not raw.strip():
-        raise ToolError("path is required", status_code=400)
-    clean = raw.strip().strip("/")
-    if clean.startswith("..") or "/../" in clean:
-        raise ToolError("path traversal is not allowed", status_code=400)
-    return clean
-
-
-def _resolve_local_path(
-    path: str,
-    *,
-    expect_file: bool = True,
-    must_exist: bool = True,
-    base: Path,
-) -> Path:
-    clean = _safe_rel(path)
-    root = base.resolve()
-    candidate = (base / clean).resolve()
-    if candidate != root and root not in candidate.parents:
-        raise ToolError(f"path escapes knowledge root: {path}", status_code=400)
-
-    if must_exist and not candidate.exists():
-        raise ToolError(f"path does not exist: {path}", status_code=400)
-    if expect_file and candidate.exists() and not candidate.is_file():
-        raise ToolError(f"path is not a file: {path}", status_code=400)
     if expect_file and candidate.suffix.lower() not in SETTINGS.allowed_extensions:
         raise ToolError(
             f"unsupported file extension. allowed: {', '.join(SETTINGS.allowed_extensions)}",

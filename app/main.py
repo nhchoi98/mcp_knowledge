@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-from urllib.parse import urlparse
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from .config import SETTINGS
-from .schemas import MCPCallRequest, MCPManifest
-from .tools import TOOL_SPECS, ToolError, describe_tool, github_connection_probe, manifest, run_tool
+from .models import MCPCallRequest, MCPManifest
+from .services import AuthService, MCPService, GitHubService, ToolError, TOOL_SPECS
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -19,57 +18,30 @@ logging.basicConfig(
 
 SERVER_NAME = "local-knowledge-mcp"
 SERVER_VERSION = "0.1.0"
-DEFAULT_PROTOCOL_VERSION = "2025-11-25"
+MEDIA_TYPE_SSE = "text/event-stream"
 
 app = FastAPI(title=SERVER_NAME, version=SERVER_VERSION)
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
-    token = SETTINGS.api_token
-    if not token:
-        return
-
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
-
-    provided = authorization.split(" ", 1)[1].strip()
-    if provided != token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token")
-
-
-def _is_origin_allowed(origin: str) -> bool:
-    if not origin or origin == "null":
-        return True
-    if origin in SETTINGS.allowed_origins:
-        return True
-
-    parsed = urlparse(origin)
-    if parsed.scheme and parsed.hostname:
-        if f"{parsed.scheme}://{parsed.hostname}" in SETTINGS.allowed_origins:
-            return True
-
-        with_port = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}" if parsed.port else None
-        if with_port and with_port in SETTINGS.allowed_origins:
-            return True
-
-        for candidate in SETTINGS.allowed_origins:
-            if candidate.endswith(":*") and f"{parsed.scheme}://{parsed.hostname}" == candidate[:-2]:
-                return True
-
-    return False
+    """Dependency for validating bearer token."""
+    if not AuthService.validate_token(authorization):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing or invalid bearer token")
 
 
 def require_origin(origin: str | None = Header(default=None)) -> None:
-    if not _is_origin_allowed(origin or ""):
+    """Dependency for validating CORS origin."""
+    if not AuthService.is_origin_allowed(origin):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="origin not allowed")
 
 
 def _event_stream():
+    """Generate SSE event stream for MCP."""
     async def event_stream():
         data = {
             "server": SERVER_NAME,
             "version": SERVER_VERSION,
-            "tools": [name for name in TOOL_SPECS.keys()],
+            "tools": list(TOOL_SPECS.keys()),
         }
         yield f"event: manifest\ndata: {json.dumps(data)}\n\n"
         while True:
@@ -87,7 +59,7 @@ def _startup() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
+    github_status = GitHubService.github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
     return {
         "ok": True,
         "backend": SETTINGS.backend,
@@ -102,17 +74,17 @@ def health() -> dict[str, Any]:
 
 @app.get("/mcp/manifest", dependencies=[Depends(require_token), Depends(require_origin)])
 def mcp_manifest() -> MCPManifest:
-    return MCPManifest(server_name=SERVER_NAME, version=SERVER_VERSION, tools=manifest(SERVER_NAME, SERVER_VERSION))
+    return MCPManifest(server_name=SERVER_NAME, version=SERVER_VERSION, tools=MCPService.manifest(SERVER_NAME, SERVER_VERSION))
 
 
 @app.post("/mcp/call", dependencies=[Depends(require_token), Depends(require_origin)])
 def mcp_call(payload: MCPCallRequest) -> dict[str, Any]:
-    github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
+    github_status = GitHubService.github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
     logger.info(
         f"MCP Call - Tool: {payload.name}, Arguments: {payload.arguments}, github_connected: {github_status.get('connected')}"
     )
     try:
-        result = run_tool(payload.name, payload.arguments)
+        result = MCPService.run_tool(payload.name, payload.arguments)
         logger.info(f"MCP Call Success - Tool: {payload.name}")
     except ToolError as exc:
         logger.error(f"MCP Call Error - Tool: {payload.name}, Error: {str(exc)}")
@@ -123,21 +95,23 @@ def mcp_call(payload: MCPCallRequest) -> dict[str, Any]:
 
 @app.get("/mcp/sse", dependencies=[Depends(require_token), Depends(require_origin)])
 async def mcp_sse() -> StreamingResponse:
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(_event_stream(), media_type=MEDIA_TYPE_SSE)
 
 
 @app.post("/mcp/sse", dependencies=[Depends(require_token), Depends(require_origin)])
 async def mcp_sse_post() -> StreamingResponse:
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(_event_stream(), media_type=MEDIA_TYPE_SSE)
 
 
 @app.get("/mcp", dependencies=[Depends(require_token), Depends(require_origin)])
 async def mcp_get() -> StreamingResponse:
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(_event_stream(), media_type=MEDIA_TYPE_SSE)
 
 
 @app.post("/mcp", dependencies=[Depends(require_token), Depends(require_origin)])
 async def mcp_jsonrpc(request: Request) -> JSONResponse:
+    """Handle MCP JSON-RPC requests."""
+    # Parse request body
     try:
         body = await request.json()
     except Exception as exc:
@@ -162,65 +136,25 @@ async def mcp_jsonrpc(request: Request) -> JSONResponse:
             content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32600, "message": "Invalid method"}},
         )
 
+    # Handle notifications (requests without id)
     if req_id is None and method.startswith("notifications/"):
         return JSONResponse(status_code=202, content={})
 
+    # Process method
     try:
         logger.info(f"MCP JSON-RPC - Method: {method}, Params: {params}")
-        if method == "initialize":
-            protocol_version = params.get("protocolVersion") or DEFAULT_PROTOCOL_VERSION
-            result = {
-                "protocolVersion": protocol_version,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-            }
-        elif method == "tools/list":
-            result = {
-                "tools": [
-                    {
-                        "name": spec.name,
-                        "description": describe_tool(spec),
-                        "inputSchema": spec.input_model.model_json_schema(),
-                        "outputSchema": spec.output_model.model_json_schema(),
-                    }
-                    for spec in TOOL_SPECS.values()
-                ]
-            }
-        elif method == "tools/call":
-            name = params.get("name")
-            arguments = params.get("arguments") or {}
-            github_status = github_connection_probe() if SETTINGS.backend == "github" else {"connected": False, "backend": SETTINGS.backend}
-            logger.info(f"MCP Tool Call - Tool: {name}, Arguments: {arguments}")
-            logger.info(f"MCP Tool Call - github_status: {github_status}")
-            model = run_tool(name, arguments)
-            structured = model.model_dump(mode="json")
-            result = {
-                "content": [{"type": "text", "text": json.dumps(structured, ensure_ascii=False)}],
-                "structuredContent": structured,
-                "github": github_status,
-                "isError": False,
-            }
-            logger.info(f"MCP Tool Call Success - Tool: {name}")
-        elif method == "ping":
-            result = {}
-        else:
-            logger.warning(f"MCP Unknown Method: {method}")
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "error": {"code": -32601, "message": f"Method not found: {method}"},
-                },
-            )
+        result = MCPService.handle_jsonrpc_method(method, params, SERVER_NAME, SERVER_VERSION)
+        logger.info(f"MCP JSON-RPC Success - Method: {method}")
     except ToolError as exc:
         logger.error(f"MCP Tool Error - Method: {method}, Error: {str(exc)}")
+        status_code = 404 if exc.status_code == 404 else 400
+        error_code = -32601 if exc.status_code == 404 else -32000
         return JSONResponse(
-            status_code=400,
+            status_code=status_code,
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "error": {"code": -32000, "message": str(exc)},
+                "error": {"code": error_code, "message": str(exc)},
             },
         )
     except Exception as exc:
